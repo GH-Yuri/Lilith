@@ -27,5 +27,7 @@ ENV/
 htmlcov/
 .pytest_cache/
 
+data/
+
 .DS_Store
 Thumbs.db

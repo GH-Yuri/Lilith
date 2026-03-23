@@ -25,16 +25,32 @@ class AlpacaConfig:
 
 
 @dataclass(frozen=True)
+class AIConfig:
+    model: str
+    base_url: str
+    api_key: str
+    temperature: float
+
+    @classmethod
+    def from_env(cls) -> "AIConfig":
+        return cls(
+            model=os.getenv("AI_MODEL", "gpt-4o-mini"),
+            base_url=os.getenv("AI_BASE_URL", "https://api.openai.com/v1"),
+            api_key=os.environ["AI_API_KEY"],
+            temperature=float(os.getenv("AI_TEMPERATURE", "0.3")),
+        )
+
+
+@dataclass(frozen=True)
 class BotConfig:
-    symbols: list[str]
-    check_interval_seconds: int
-    max_position_pct: float  # max % of portfolio per position
+    symbol: str
+    analysis_interval_seconds: int
+    data_dir: str
 
     @classmethod
     def from_env(cls) -> "BotConfig":
-        symbols_raw = os.getenv("TRADE_SYMBOLS", "AAPL,MSFT,GOOGL")
         return cls(
-            symbols=[s.strip() for s in symbols_raw.split(",")],
-            check_interval_seconds=int(os.getenv("CHECK_INTERVAL_SECONDS", "60")),
-            max_position_pct=float(os.getenv("MAX_POSITION_PCT", "0.05")),
+            symbol=os.getenv("TRADE_SYMBOL", "BTC/USD"),
+            analysis_interval_seconds=int(os.getenv("ANALYSIS_INTERVAL_SECONDS", "300")),
+            data_dir=os.getenv("DATA_DIR", "data"),
         )

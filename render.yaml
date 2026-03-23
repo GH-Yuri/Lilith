@@ -11,9 +11,15 @@ services:
         sync: false
       - key: ALPACA_PAPER
         value: "true"
-      - key: TRADE_SYMBOLS
-        value: "AAPL,MSFT,GOOGL"
-      - key: CHECK_INTERVAL_SECONDS
-        value: "60"
-      - key: MAX_POSITION_PCT
-        value: "0.05"
+      - key: AI_API_KEY
+        sync: false
+      - key: AI_BASE_URL
+        value: "https://api.openai.com/v1"
+      - key: AI_MODEL
+        value: "gpt-4o-mini"
+      - key: AI_TEMPERATURE
+        value: "0.3"
+      - key: TRADE_SYMBOL
+        value: "BTC/USD"
+      - key: ANALYSIS_INTERVAL_SECONDS
+        value: "300"
