@@ -2,7 +2,7 @@ services:
   - type: worker
     name: lilith
     runtime: docker
-    repo: https://github.com/your-username/Lilith
+    repo: https://github.com/GH-Yuri/Lilith
     plan: starter
     envVars:
       - key: ALPACA_API_KEY
