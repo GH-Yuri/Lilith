@@ -14,9 +14,9 @@ services:
       - key: AI_API_KEY
         sync: false
       - key: AI_BASE_URL
-        value: "https://api.openai.com/v1"
+        value: "https://api.x.ai/v1"
       - key: AI_MODEL
-        value: "gpt-4o-mini"
+        value: "grok-3-mini"
       - key: AI_TEMPERATURE
         value: "0.3"
       - key: TRADE_SYMBOL
