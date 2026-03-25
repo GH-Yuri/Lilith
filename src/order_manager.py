@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class OrderManager:
-    """Translates AI actions into Alpaca API calls."""
+    """Translates AI actions into Alpaca API calls (long-only)."""
 
     def __init__(self, client: AlpacaClient, trade_logger: TradeLogger) -> None:
         self.client = client
@@ -31,10 +31,6 @@ class OrderManager:
             try:
                 if action_type == "OPEN_POSITION":
                     self._open_position(action, symbol, reasoning, market_assessment)
-                elif action_type == "CLOSE_POSITION":
-                    self._close_position(symbol, reasoning, market_assessment)
-                elif action_type == "UPDATE_STOP_LOSS":
-                    self._update_stop_loss(action, symbol, reasoning, market_assessment)
                 elif action_type == "HOLD":
                     logger.info("HOLD: %s", reasoning)
                     self.trade_logger.log_action(
@@ -55,8 +51,6 @@ class OrderManager:
         reasoning: str,
         market_assessment: str,
     ) -> None:
-        side_str = action.get("side", "buy").lower()
-        side = OrderSide.BUY if side_str == "buy" else OrderSide.SELL
         qty = Decimal(str(action.get("qty", "0.001")))
         take_profit = float(action.get("take_profit", 0))
         stop_loss = float(action.get("stop_loss", 0))
@@ -73,13 +67,13 @@ class OrderManager:
         order = self.client.submit_bracket_order(
             symbol=symbol,
             qty=qty,
-            side=side,
+            side=OrderSide.BUY,
             take_profit_price=take_profit,
             stop_loss_price=stop_loss,
         )
 
         self.trade_logger.log_action(
-            action_type=f"OPEN_{side_str.upper()}",
+            action_type="OPEN_BUY",
             symbol=symbol,
             reasoning=reasoning,
             qty=str(qty),
@@ -89,18 +83,13 @@ class OrderManager:
             market_assessment=market_assessment,
         )
 
-    def _close_position(
-        self,
-        symbol: str,
-        reasoning: str,
-        market_assessment: str,
-    ) -> None:
+    def force_close_position(self, symbol: str) -> None:
+        """Auto-close a position after the max hold time has elapsed."""
         position = self.client.get_position(symbol)
         if not position:
-            logger.info("No position in %s to close", symbol)
+            logger.info("No position in %s to force-close", symbol)
             return
 
-        # Cancel associated TP/SL orders first
         open_orders = self.client.get_open_orders(symbol)
         for order in open_orders:
             self.client.cancel_order(str(order.id))
@@ -108,56 +97,13 @@ class OrderManager:
         self.client.close_position(symbol)
 
         self.trade_logger.log_action(
-            action_type="CLOSE",
+            action_type="FORCE_CLOSE_18H",
             symbol=symbol,
-            reasoning=reasoning,
+            reasoning="Position automatically closed after max hold time (18h)",
             qty=str(position.qty),
             price=str(position.current_price),
-            market_assessment=market_assessment,
         )
-
-    def _update_stop_loss(
-        self,
-        action: dict,
-        symbol: str,
-        reasoning: str,
-        market_assessment: str,
-    ) -> None:
-        new_stop = float(action.get("stop_loss", 0))
-        if new_stop <= 0:
-            logger.error("Invalid new stop-loss price: %s", new_stop)
-            return
-
-        position = self.client.get_position(symbol)
-        if not position:
-            logger.info("No position to update stop-loss for %s", symbol)
-            return
-
-        # Find and cancel existing stop-loss order, then create a new one
-        open_orders = self.client.get_open_orders(symbol)
-        for order in open_orders:
-            if order.stop_price is not None:
-                self.client.cancel_order(str(order.id))
-                logger.info("Cancelled old stop-loss order %s", order.id)
-
-        # Submit a new stop-loss order
-        from alpaca.trading.requests import StopOrderRequest
-        from alpaca.trading.enums import TimeInForce
-
-        side = OrderSide.SELL if float(position.qty) > 0 else OrderSide.BUY
-        stop_order = StopOrderRequest(
-            symbol=symbol,
-            qty=abs(Decimal(str(position.qty))),
-            side=side,
-            stop_price=new_stop,
-            time_in_force=TimeInForce.GTC,
-        )
-        self.client.trading.submit_order(stop_order)
-
-        self.trade_logger.log_action(
-            action_type="UPDATE_SL",
-            symbol=symbol,
-            reasoning=reasoning,
-            stop_loss=new_stop,
-            market_assessment=market_assessment,
+        logger.info(
+            "Force-closed %s | qty=%s | P&L=%s",
+            symbol, position.qty, position.unrealized_pl,
         )

@@ -23,3 +23,7 @@ services:
         value: "BTC/USD"
       - key: ANALYSIS_INTERVAL_SECONDS
         value: "300"
+      - key: MAX_HOLD_HOURS
+        value: "18"
+      - key: DAILY_ANALYSIS_HOUR_UTC
+        value: "8"

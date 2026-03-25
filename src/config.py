@@ -46,6 +46,8 @@ class BotConfig:
     symbol: str
     analysis_interval_seconds: int
     data_dir: str
+    max_hold_hours: int
+    daily_analysis_hour_utc: int
 
     @classmethod
     def from_env(cls) -> "BotConfig":
@@ -53,4 +55,6 @@ class BotConfig:
             symbol=os.getenv("TRADE_SYMBOL", "BTC/USD"),
             analysis_interval_seconds=int(os.getenv("ANALYSIS_INTERVAL_SECONDS", "300")),
             data_dir=os.getenv("DATA_DIR", "data"),
+            max_hold_hours=int(os.getenv("MAX_HOLD_HOURS", "18")),
+            daily_analysis_hour_utc=int(os.getenv("DAILY_ANALYSIS_HOUR_UTC", "8")),
         )

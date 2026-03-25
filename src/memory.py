@@ -70,6 +70,16 @@ class TradeLogger:
         entries = self._load_all()
         return entries[-n:]
 
+    def get_last_open_time(self, symbol: str) -> datetime | None:
+        """Return the timestamp of the most recent OPEN_BUY for *symbol*."""
+        for entry in reversed(self._load_all()):
+            if entry.get("action") == "OPEN_BUY" and entry.get("symbol") == symbol:
+                try:
+                    return datetime.fromisoformat(entry["timestamp"])
+                except (KeyError, ValueError):
+                    return None
+        return None
+
 
 class NotesManager:
     """Simple key-value store for AI notes between cycles."""

@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 class Lilith:
-    """AI-powered autonomous Bitcoin trader."""
+    """AI-powered autonomous Bitcoin trader — daily long-only strategy."""
 
     def __init__(
         self,
@@ -42,6 +42,8 @@ class Lilith:
         self.trade_logger = TradeLogger(bot_config.data_dir)
         self.notes_manager = NotesManager(bot_config.data_dir)
         self.order_manager = OrderManager(self.client, self.trade_logger)
+
+        self._last_analysis_date: str | None = None
 
     def _collect_data(self) -> dict:
         """Gather all data needed for the AI analysis."""
@@ -96,16 +98,14 @@ class Lilith:
             "notes": notes,
         }
 
-    def run_once(self) -> None:
-        """Single analysis + execution cycle."""
+    def _run_analysis(self) -> None:
+        """Single daily analysis + execution cycle."""
         symbol = self.config.symbol
         logger.info("=" * 60)
-        logger.info("Lilith analysis cycle | %s", symbol)
+        logger.info("Lilith DAILY analysis | %s", symbol)
 
-        # 1. Collect all data
         data = self._collect_data()
 
-        # 2. Build prompt
         user_prompt = build_context(
             account=data["account"],
             positions=data["positions"],
@@ -118,7 +118,6 @@ class Lilith:
             notes=data["notes"],
         )
 
-        # 3. Ask AI
         logger.info("Sending data to AI for analysis...")
         response = self.ai.analyze(SYSTEM_PROMPT, user_prompt)
 
@@ -130,30 +129,86 @@ class Lilith:
         for a in actions:
             logger.info("  -> %s: %s", a.get("type", "?"), a.get("reasoning", "")[:100])
 
-        # 4. Execute actions
         self.order_manager.execute_actions(actions, symbol, market)
 
-        # 5. Save notes
         if notes:
             self.notes_manager.save(notes, market)
 
-    def run(self) -> None:
-        """Main loop - runs forever with configured interval."""
+    def _has_open_position(self) -> bool:
+        """Check if there is an open BTC position on Alpaca."""
+        position = self.client.get_position(self.config.symbol)
+        return position is not None
+
+    def _check_and_force_close(self) -> bool:
+        """If the open position exceeds max_hold_hours, force-close it.
+
+        Returns True if a force-close happened.
+        """
+        open_time = self.trade_logger.get_last_open_time(self.config.symbol)
+        if open_time is None:
+            logger.warning("Position exists but no OPEN_BUY in trade log — force-closing")
+            self.order_manager.force_close_position(self.config.symbol)
+            return True
+
+        now = datetime.now(UTC)
+        if open_time.tzinfo is None:
+            open_time = open_time.replace(tzinfo=UTC)
+
+        held_hours = (now - open_time).total_seconds() / 3600
+        remaining = self.config.max_hold_hours - held_hours
+
+        if held_hours >= self.config.max_hold_hours:
+            logger.info(
+                "Position held for %.1fh (max %dh) — force-closing",
+                held_hours, self.config.max_hold_hours,
+            )
+            self.order_manager.force_close_position(self.config.symbol)
+            return True
+
         logger.info(
-            "Lilith v2 starting | symbol=%s | interval=%ds | AI=%s",
+            "Position open for %.1fh | %.1fh remaining until auto-close",
+            held_hours, remaining,
+        )
+        return False
+
+    def _is_analysis_time(self) -> bool:
+        """Check if it's the configured daily analysis hour and we haven't
+        already run an analysis today."""
+        now = datetime.now(UTC)
+        today = now.strftime("%Y-%m-%d")
+
+        if self._last_analysis_date == today:
+            return False
+
+        target_hour = self.config.daily_analysis_hour_utc
+        return now.hour == target_hour
+
+    def run(self) -> None:
+        """Main loop — monitors every 5 min, analyzes once per day."""
+        logger.info(
+            "Lilith v3 starting | symbol=%s | daily analysis at %02d:00 UTC "
+            "| max hold %dh | check interval %ds",
             self.config.symbol,
+            self.config.daily_analysis_hour_utc,
+            self.config.max_hold_hours,
             self.config.analysis_interval_seconds,
-            self.ai.config.model,
         )
 
         while True:
             try:
-                self.run_once()
+                if self._has_open_position():
+                    self._check_and_force_close()
+                elif self._is_analysis_time():
+                    self._run_analysis()
+                    self._last_analysis_date = datetime.now(UTC).strftime("%Y-%m-%d")
+                else:
+                    now = datetime.now(UTC)
+                    logger.info(
+                        "No position | next analysis at %02d:00 UTC (now %02d:%02d UTC)",
+                        self.config.daily_analysis_hour_utc,
+                        now.hour, now.minute,
+                    )
             except Exception:
                 logger.exception("Unhandled error in main loop")
 
-            logger.info(
-                "Next analysis in %d seconds...",
-                self.config.analysis_interval_seconds,
-            )
             time.sleep(self.config.analysis_interval_seconds)
