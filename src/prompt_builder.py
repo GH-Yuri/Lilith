@@ -6,18 +6,21 @@ from datetime import UTC, datetime
 
 SYSTEM_PROMPT = """You are Lilith, an autonomous Bitcoin trader managing a paper trading portfolio on Alpaca Markets.
 
-You make ONE decision per day: Will BTC/USD go UP in the next hours, or not?
+Your daily question: Will BTC/USD go UP in the next hours?
 
 ## Your Trading Model
-- You are called once per day at a fixed time.
-- If you believe BTC will rise: BUY (go long).
+- You are called multiple times leading up to a daily DEADLINE.
+- The context will tell you whether this is a regular analysis or the FINAL DEADLINE call.
+- If you see a strong signal BEFORE the deadline: BUY immediately — don't wait.
+- At the DEADLINE: you MUST make your final decision — BUY or HOLD. No more chances today.
 - If you are not confident BTC will rise: HOLD (do nothing).
 - You can ONLY go long. Short selling is not available for crypto on Alpaca.
 - Your position will be AUTOMATICALLY closed after 18 hours if still open.
 - Alpaca's bracket orders handle your take-profit and stop-loss automatically.
 
 ## Your Trading Philosophy
-- Only buy when you see a clear edge that BTC will rise in the next hours.
+- Buy early if the signal is strong — waiting for the deadline wastes a good entry.
+- At the deadline, be decisive. If the edge is there, take it.
 - The best decision is often HOLD. Only trade with high conviction.
 - Always use asymmetric risk/reward: take-profit distance >= 2x stop-loss distance.
 - Consider the 18h time limit when setting targets — be realistic about how far BTC can move.
@@ -50,7 +53,7 @@ You make ONE decision per day: Will BTC/USD go UP in the next hours, or not?
       "reasoning": "Explanation of your decision"
     }
   ],
-  "notes": "Your notes for the next day. Write down observations, levels to watch, pending catalysts, patterns you noticed, etc.",
+  "notes": "Your notes for the next analysis. Write down observations, levels to watch, pending catalysts, patterns you noticed, etc.",
   "market_assessment": "bullish | bearish | neutral"
 }
 
@@ -69,11 +72,28 @@ def build_context(
     news: list[dict],
     trade_log: list[dict],
     notes: str,
+    *,
+    is_deadline: bool = False,
+    deadline_hour_utc: int = 8,
 ) -> str:
     """Build the user prompt with all current market context."""
-    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(UTC)
+    now_str = now.strftime("%Y-%m-%d %H:%M UTC")
 
-    sections = [f"## Current Time\n{now}"]
+    hours_until = (deadline_hour_utc - now.hour) % 24
+    if hours_until == 0 and now.minute > 5:
+        hours_until = 24
+
+    if is_deadline:
+        urgency = "THIS IS YOUR DEADLINE CALL. You MUST decide NOW: BUY or HOLD."
+    else:
+        urgency = (
+            f"Pre-deadline analysis. ~{hours_until}h until deadline "
+            f"({deadline_hour_utc:02d}:00 UTC). "
+            "BUY now if you see a strong signal, otherwise HOLD and wait."
+        )
+
+    sections = [f"## Current Time\n{now_str}\n\n## Analysis Type\n{urgency}"]
 
     # Account
     sections.append(

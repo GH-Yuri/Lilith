@@ -44,17 +44,19 @@ class AIConfig:
 @dataclass(frozen=True)
 class BotConfig:
     symbol: str
-    analysis_interval_seconds: int
+    check_interval_seconds: int
+    analysis_cooldown_minutes: int
     data_dir: str
     max_hold_hours: int
-    daily_analysis_hour_utc: int
+    daily_deadline_hour_utc: int
 
     @classmethod
     def from_env(cls) -> "BotConfig":
         return cls(
             symbol=os.getenv("TRADE_SYMBOL", "BTC/USD"),
-            analysis_interval_seconds=int(os.getenv("ANALYSIS_INTERVAL_SECONDS", "300")),
+            check_interval_seconds=int(os.getenv("CHECK_INTERVAL_SECONDS", "300")),
+            analysis_cooldown_minutes=int(os.getenv("ANALYSIS_COOLDOWN_MINUTES", "30")),
             data_dir=os.getenv("DATA_DIR", "data"),
             max_hold_hours=int(os.getenv("MAX_HOLD_HOURS", "18")),
-            daily_analysis_hour_utc=int(os.getenv("DAILY_ANALYSIS_HOUR_UTC", "8")),
+            daily_deadline_hour_utc=int(os.getenv("DAILY_DEADLINE_HOUR_UTC", "8")),
         )

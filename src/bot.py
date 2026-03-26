@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 
 
 class Lilith:
-    """AI-powered autonomous Bitcoin trader — daily long-only strategy."""
+    """AI-powered autonomous Bitcoin trader — daily long-only strategy
+    with analysis window and deadline."""
 
     def __init__(
         self,
@@ -43,10 +44,12 @@ class Lilith:
         self.notes_manager = NotesManager(bot_config.data_dir)
         self.order_manager = OrderManager(self.client, self.trade_logger)
 
-        self._last_analysis_date: str | None = None
+        self._decision_made_date: str | None = None
+        self._last_ai_call: datetime | None = None
+
+    # ── Data Collection ───────────────────────────────────────
 
     def _collect_data(self) -> dict:
-        """Gather all data needed for the AI analysis."""
         symbol = self.config.symbol
 
         account = self.client.get_account()
@@ -98,11 +101,17 @@ class Lilith:
             "notes": notes,
         }
 
-    def _run_analysis(self) -> None:
-        """Single daily analysis + execution cycle."""
+    # ── AI Analysis ───────────────────────────────────────────
+
+    def _run_analysis(self, *, is_deadline: bool = False) -> bool:
+        """Run one AI analysis cycle.
+
+        Returns True if a BUY was placed.
+        """
         symbol = self.config.symbol
+        label = "DEADLINE" if is_deadline else "pre-deadline"
         logger.info("=" * 60)
-        logger.info("Lilith DAILY analysis | %s", symbol)
+        logger.info("Lilith %s analysis | %s", label, symbol)
 
         data = self._collect_data()
 
@@ -116,6 +125,8 @@ class Lilith:
             news=data["news"],
             trade_log=data["trade_log"],
             notes=data["notes"],
+            is_deadline=is_deadline,
+            deadline_hour_utc=self.config.daily_deadline_hour_utc,
         )
 
         logger.info("Sending data to AI for analysis...")
@@ -134,16 +145,21 @@ class Lilith:
         if notes:
             self.notes_manager.save(notes, market)
 
+        self._last_ai_call = datetime.now(UTC)
+
+        bought = any(
+            a.get("type", "").upper() == "OPEN_POSITION" for a in actions
+        )
+        return bought
+
+    # ── Position Management ───────────────────────────────────
+
     def _has_open_position(self) -> bool:
-        """Check if there is an open BTC position on Alpaca."""
         position = self.client.get_position(self.config.symbol)
         return position is not None
 
     def _check_and_force_close(self) -> bool:
-        """If the open position exceeds max_hold_hours, force-close it.
-
-        Returns True if a force-close happened.
-        """
+        """Force-close if position exceeds max hold time. Returns True if closed."""
         open_time = self.trade_logger.get_last_open_time(self.config.symbol)
         if open_time is None:
             logger.warning("Position exists but no OPEN_BUY in trade log — force-closing")
@@ -171,44 +187,104 @@ class Lilith:
         )
         return False
 
-    def _is_analysis_time(self) -> bool:
-        """Check if it's the configured daily analysis hour and we haven't
-        already run an analysis today."""
-        now = datetime.now(UTC)
-        today = now.strftime("%Y-%m-%d")
+    # ── Analysis Window Logic ─────────────────────────────────
 
-        if self._last_analysis_date == today:
-            return False
+    def _ai_cooldown_ok(self) -> bool:
+        """True if enough time has passed since the last AI call."""
+        if self._last_ai_call is None:
+            return True
+        elapsed = (datetime.now(UTC) - self._last_ai_call).total_seconds()
+        return elapsed >= self.config.analysis_cooldown_minutes * 60
 
-        target_hour = self.config.daily_analysis_hour_utc
-        return now.hour == target_hour
+    def _is_deadline_hour(self) -> bool:
+        return datetime.now(UTC).hour == self.config.daily_deadline_hour_utc
+
+    def _is_past_deadline(self) -> bool:
+        return datetime.now(UTC).hour > self.config.daily_deadline_hour_utc
+
+    def _mark_decision_done(self) -> None:
+        self._decision_made_date = datetime.now(UTC).strftime("%Y-%m-%d")
+
+    def _decision_done_today(self) -> bool:
+        return self._decision_made_date == datetime.now(UTC).strftime("%Y-%m-%d")
+
+    # ── Main Loop ─────────────────────────────────────────────
 
     def run(self) -> None:
-        """Main loop — monitors every 5 min, analyzes once per day."""
         logger.info(
-            "Lilith v3 starting | symbol=%s | daily analysis at %02d:00 UTC "
-            "| max hold %dh | check interval %ds",
+            "Lilith v4 starting | symbol=%s | deadline %02d:00 UTC "
+            "| max hold %dh | AI cooldown %d min | check every %ds",
             self.config.symbol,
-            self.config.daily_analysis_hour_utc,
+            self.config.daily_deadline_hour_utc,
             self.config.max_hold_hours,
-            self.config.analysis_interval_seconds,
+            self.config.analysis_cooldown_minutes,
+            self.config.check_interval_seconds,
         )
 
         while True:
             try:
-                if self._has_open_position():
-                    self._check_and_force_close()
-                elif self._is_analysis_time():
-                    self._run_analysis()
-                    self._last_analysis_date = datetime.now(UTC).strftime("%Y-%m-%d")
-                else:
-                    now = datetime.now(UTC)
-                    logger.info(
-                        "No position | next analysis at %02d:00 UTC (now %02d:%02d UTC)",
-                        self.config.daily_analysis_hour_utc,
-                        now.hour, now.minute,
-                    )
+                self._tick()
             except Exception:
                 logger.exception("Unhandled error in main loop")
 
-            time.sleep(self.config.analysis_interval_seconds)
+            time.sleep(self.config.check_interval_seconds)
+
+    def _tick(self) -> None:
+        """Single iteration of the main loop."""
+        now = datetime.now(UTC)
+
+        # Phase A: position is open → monitor expiry
+        if self._has_open_position():
+            self._check_and_force_close()
+            return
+
+        # Phase B: no position, already decided today → wait for tomorrow
+        if self._decision_done_today():
+            if self._is_past_deadline():
+                logger.info(
+                    "Today's decision done | waiting for tomorrow "
+                    "(deadline %02d:00 UTC)",
+                    self.config.daily_deadline_hour_utc,
+                )
+            return
+
+        # Phase C: deadline hour → mandatory final analysis
+        if self._is_deadline_hour():
+            logger.info("DEADLINE reached — running mandatory analysis")
+            bought = self._run_analysis(is_deadline=True)
+            self._mark_decision_done()
+            if bought:
+                logger.info("Deadline decision: BUY placed")
+            else:
+                logger.info("Deadline decision: HOLD — no trade today")
+            return
+
+        # Phase D: past deadline but no decision recorded (bot restarted mid-day)
+        if self._is_past_deadline():
+            logger.info(
+                "Past deadline, no decision on record — marking today as done"
+            )
+            self._mark_decision_done()
+            return
+
+        # Phase E: before deadline → pre-deadline analysis window
+        if self._ai_cooldown_ok():
+            logger.info(
+                "Pre-deadline analysis window | now %02d:%02d UTC | "
+                "deadline %02d:00 UTC",
+                now.hour, now.minute,
+                self.config.daily_deadline_hour_utc,
+            )
+            bought = self._run_analysis(is_deadline=False)
+            if bought:
+                logger.info("Early BUY placed — decision done for today")
+                self._mark_decision_done()
+        else:
+            cooldown_left = self.config.analysis_cooldown_minutes * 60
+            if self._last_ai_call:
+                elapsed = (now - self._last_ai_call).total_seconds()
+                cooldown_left = max(0, cooldown_left - elapsed)
+            logger.info(
+                "AI cooldown | next analysis in ~%.0f min",
+                cooldown_left / 60,
+            )
